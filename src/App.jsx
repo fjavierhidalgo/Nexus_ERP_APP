@@ -3,6 +3,7 @@ import { CRMProvider, useCRM } from './context/CRMContext';
 import { Sidebar } from './components/layout/Sidebar';
 import { Navbar } from './components/layout/Navbar';
 import { GlobalSearchModal } from './components/common/GlobalSearchModal';
+import { OrganizationSelectorModal } from './components/common/OrganizationSelectorModal';
 import { ToastContainer } from './components/common/ToastContainer';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ClientList } from './components/clients/ClientList';
@@ -32,7 +33,7 @@ const AppContent = () => {
         <div className="flex flex-col items-center justify-center py-24 space-y-3 text-slate-400">
           <Loader2 className="w-10 h-10 animate-spin text-indigo-500" />
           <p className="text-sm font-semibold text-slate-300">Conectando con https://erpnexus.somee.com/api...</p>
-          <p className="text-xs text-slate-400">Obteniendo recursos y sincronizando el estado.</p>
+          <p className="text-xs text-slate-400">Cargando organización y sincronizando recursos.</p>
         </div>
       );
     }
@@ -101,6 +102,7 @@ const AppContent = () => {
       </div>
 
       {/* Global Overlays & Modals */}
+      <OrganizationSelectorModal />
       <GlobalSearchModal />
       <ToastContainer />
 

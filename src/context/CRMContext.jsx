@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import {
+  organizationsApi,
   clientsApi,
   companiesApi,
   contactsApi,
@@ -31,6 +32,11 @@ export const CRMProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
   const [apiError, setApiError] = useState(null);
 
+  // --- MULTI-ORGANIZATION / MULTI-COMPANY STATE ---
+  const [organizations, setOrganizations] = useState([]);
+  const [currentOrganization, setCurrentOrganization] = useState(null);
+  const [isOrgSelectorOpen, setIsOrgSelectorOpen] = useState(false);
+
   const addToast = (message, type = 'info') => {
     const id = Date.now();
     setToasts((prev) => [...prev, { id, message, type }]);
@@ -54,11 +60,41 @@ export const CRMProvider = ({ children }) => {
   const [automations, setAutomations] = useState([]);
   const [integrations, setIntegrations] = useState([]);
 
-  // Fetch initial data from REST API on mount
-  const fetchAllData = async () => {
+  /**
+   * Main data fetcher:
+   * 1. Fetches catalog of organizations.
+   * 2. Resolves current active organization (using targetOrgCode, saved code in localStorage, or default org '1').
+   * 3. Fetches all 9 resource collections filtered by organizationCode.
+   */
+  const fetchAllData = async (targetOrgCode) => {
     setLoading(true);
     setApiError(null);
     try {
+      // 1. Fetch Organizations
+      const orgsData = await organizationsApi.getAll().catch((err) => {
+        console.warn('Could not fetch organizations from API:', err);
+        return [{ id: '0001', code: '1', name: 'Organización por defecto', isActive: true }];
+      });
+
+      const validOrgs = Array.isArray(orgsData) && orgsData.length > 0
+        ? orgsData
+        : [{ id: '0001', code: '1', name: 'Organización por defecto', isActive: true }];
+
+      setOrganizations(validOrgs);
+
+      // 2. Resolve Active Organization Code
+      const savedCode = localStorage.getItem('selectedOrgCode');
+      const activeCode = targetOrgCode || currentOrganization?.code || savedCode || '1';
+
+      let matchedOrg = validOrgs.find((o) => o.code === activeCode);
+      if (!matchedOrg) {
+        matchedOrg = validOrgs[0];
+      }
+
+      setCurrentOrganization(matchedOrg);
+      localStorage.setItem('selectedOrgCode', matchedOrg.code);
+
+      // 3. Fetch Collections filtered by activeCode
       const [
         clientsData,
         companiesData,
@@ -70,15 +106,15 @@ export const CRMProvider = ({ children }) => {
         automationsData,
         integrationsData
       ] = await Promise.all([
-        clientsApi.getAll().catch(() => []),
-        companiesApi.getAll().catch(() => []),
-        contactsApi.getAll().catch(() => []),
-        interactionsApi.getAll().catch(() => []),
-        dealsApi.getAll().catch(() => []),
-        tasksApi.getAll().catch(() => []),
-        documentsApi.getAll().catch(() => []),
-        automationsApi.getAll().catch(() => []),
-        integrationsApi.getAll().catch(() => []),
+        clientsApi.getAll(matchedOrg.code).catch(() => []),
+        companiesApi.getAll(matchedOrg.code).catch(() => []),
+        contactsApi.getAll(matchedOrg.code).catch(() => []),
+        interactionsApi.getAll(matchedOrg.code).catch(() => []),
+        dealsApi.getAll(matchedOrg.code).catch(() => []),
+        tasksApi.getAll(matchedOrg.code).catch(() => []),
+        documentsApi.getAll(matchedOrg.code).catch(() => []),
+        automationsApi.getAll(matchedOrg.code).catch(() => []),
+        integrationsApi.getAll(matchedOrg.code).catch(() => []),
       ]);
 
       setClients(clientsData || []);
@@ -91,7 +127,7 @@ export const CRMProvider = ({ children }) => {
       setAutomations(automationsData || []);
       setIntegrations(integrationsData || []);
       
-      addToast('Datos sincronizados en tiempo real con la API.', 'success');
+      addToast(`Organización activa: "${matchedOrg.name}" (${matchedOrg.code})`, 'success');
     } catch (err) {
       console.error('Error fetching API data:', err);
       setApiError(err.message);
@@ -105,12 +141,43 @@ export const CRMProvider = ({ children }) => {
     fetchAllData();
   }, []);
 
+  // --- ORGANIZATION ACTIONS ---
+
+  const selectOrganization = (org) => {
+    if (!org) return;
+    setCurrentOrganization(org);
+    localStorage.setItem('selectedOrgCode', org.code);
+    fetchAllData(org.code);
+  };
+
+  const createOrganization = async (orgData) => {
+    try {
+      const payload = {
+        code: orgData.code.trim(),
+        name: orgData.name.trim(),
+        isActive: true
+      };
+      const created = await organizationsApi.create(payload);
+      setOrganizations((prev) => [...prev, created]);
+      selectOrganization(created);
+      addToast(`Nueva organización "${created.name}" creada y activada.`, 'success');
+      return created;
+    } catch (err) {
+      addToast(`Error al crear organización: ${err.message}`, 'warning');
+      throw err;
+    }
+  };
+
+  // Helper to ensure organizationCode is attached to requests
+  const getOrgCode = () => currentOrganization?.code || '1';
+
   // --- CRUD ACTIONS CONNECTED TO API ---
 
   // 1. CLIENTS
   const addClient = async (clientData) => {
     try {
       const payload = {
+        organizationCode: getOrgCode(),
         name: clientData.name,
         email: clientData.email,
         phone: clientData.phone || null,
@@ -132,7 +199,7 @@ export const CRMProvider = ({ children }) => {
 
       const created = await clientsApi.create(payload);
       setClients((prev) => [created, ...prev]);
-      addToast(`Cliente "${created.name}" guardado en la API.`, 'success');
+      addToast(`Cliente "${created.name}" guardado en la API (${getOrgCode()}).`, 'success');
       return created;
     } catch (err) {
       addToast(`Error al guardar cliente: ${err.message}`, 'warning');
@@ -146,6 +213,7 @@ export const CRMProvider = ({ children }) => {
       if (!existing) return;
 
       const payload = {
+        organizationCode: updatedFields.organizationCode || existing.organizationCode || getOrgCode(),
         name: updatedFields.name ?? existing.name,
         email: updatedFields.email ?? existing.email,
         phone: updatedFields.phone ?? existing.phone,
@@ -191,6 +259,7 @@ export const CRMProvider = ({ children }) => {
   const addCompany = async (companyData) => {
     try {
       const payload = {
+        organizationCode: getOrgCode(),
         name: companyData.name,
         cif: companyData.cif || null,
         sector: companyData.sector || null,
@@ -215,6 +284,7 @@ export const CRMProvider = ({ children }) => {
   const addContact = async (contactData) => {
     try {
       const payload = {
+        organizationCode: getOrgCode(),
         companyId: contactData.companyId || null,
         name: contactData.name,
         email: contactData.email,
@@ -236,6 +306,7 @@ export const CRMProvider = ({ children }) => {
   const addInteraction = async (newIntData) => {
     try {
       const payload = {
+        organizationCode: getOrgCode(),
         clientId: newIntData.clientId || null,
         type: newIntData.type || 'llamada',
         title: newIntData.title,
@@ -269,6 +340,7 @@ export const CRMProvider = ({ children }) => {
   const addDeal = async (dealData) => {
     try {
       const payload = {
+        organizationCode: getOrgCode(),
         title: dealData.title,
         clientId: dealData.clientId || null,
         clientName: dealData.clientName || null,
@@ -297,6 +369,7 @@ export const CRMProvider = ({ children }) => {
 
       const prob = newStage === 'won' ? 100 : newStage === 'lost' ? 0 : existing.probability;
       const payload = {
+        organizationCode: existing.organizationCode || getOrgCode(),
         title: existing.title,
         clientId: existing.clientId,
         clientName: existing.clientName,
@@ -332,6 +405,7 @@ export const CRMProvider = ({ children }) => {
   const addTask = async (taskData) => {
     try {
       const payload = {
+        organizationCode: getOrgCode(),
         title: taskData.title,
         clientId: taskData.clientId || null,
         clientName: taskData.clientName || null,
@@ -358,6 +432,7 @@ export const CRMProvider = ({ children }) => {
 
       const newStatus = existing.status === 'completed' ? 'pending' : 'completed';
       const payload = {
+        organizationCode: existing.organizationCode || getOrgCode(),
         title: existing.title,
         clientId: existing.clientId,
         clientName: existing.clientName,
@@ -391,6 +466,7 @@ export const CRMProvider = ({ children }) => {
   const addDocument = async (docData) => {
     try {
       const payload = {
+        organizationCode: getOrgCode(),
         clientId: docData.clientId || null,
         clientName: docData.clientName || null,
         title: docData.title,
@@ -428,6 +504,7 @@ export const CRMProvider = ({ children }) => {
       if (!existing) return;
 
       const payload = {
+        organizationCode: existing.organizationCode || getOrgCode(),
         name: existing.name,
         trigger: existing.trigger,
         condition: existing.condition,
@@ -452,6 +529,7 @@ export const CRMProvider = ({ children }) => {
       if (!existing) return;
 
       const payload = {
+        organizationCode: existing.organizationCode || getOrgCode(),
         name: existing.name,
         connected: !existing.connected,
         lastSync: new Date().toISOString(),
@@ -485,7 +563,15 @@ export const CRMProvider = ({ children }) => {
         removeToast,
         loading,
         apiError,
-        refetchData: fetchAllData,
+        refetchData: () => fetchAllData(currentOrganization?.code),
+
+        // Organizations & Multi-company State
+        organizations,
+        currentOrganization,
+        isOrgSelectorOpen,
+        setIsOrgSelectorOpen,
+        selectOrganization,
+        createOrganization,
 
         // Collections
         clients,
